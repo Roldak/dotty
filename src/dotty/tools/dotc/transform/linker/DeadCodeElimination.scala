@@ -19,12 +19,14 @@ class DeadCodeElimination extends MiniPhaseTransform {
   private var buildCallGraphPhase: BuildCallGraph = _
   private var exception: Tree = _
   private var exportAnnotation: ClassSymbol = _
+  private var doNotDCEAnnotation: ClassSymbol = _
 
   override def prepareForUnit(tree: tpd.Tree)(implicit ctx: Context): TreeTransform = {
     buildCallGraphPhase = ctx.phaseOfClass(classOf[BuildCallGraph]).asInstanceOf[BuildCallGraph]
     callGraph = buildCallGraphPhase.getCallGraph
     exception = Throw(New(ctx.requiredClassRef("dotty.runtime.DeadCodeEliminated"), Nil))
     exportAnnotation = defn.ExportAnnot
+    doNotDCEAnnotation = ctx.requiredClassRef("scala.DoNotDCE").symbol.asClass
     this
   }
 
@@ -35,7 +37,12 @@ class DeadCodeElimination extends MiniPhaseTransform {
 
   override def transformDefDef(tree: tpd.DefDef)(implicit ctx: Context, info: TransformerInfo): Tree = {
     val sym = tree.symbol
-    if (sym.is(Label) || keepAsNew(sym) || sym.isConstructor || callGraph.isReachableMethod(sym)) tree
+    val hasNoDCEannot = sym.hasAnnotation(doNotDCEAnnotation)
+    if (sym.is(Label) || keepAsNew(sym) || sym.isConstructor || callGraph.isReachableMethod(sym)) {
+      if (hasNoDCEannot) ctx.warning("DoNotDCE annotation is used on a reachable symbol", tree.pos)
+      tree
+    }
+    else if (hasNoDCEannot) tree
     else {
       assert(!sym.hasAnnotation(exportAnnotation))
       tpd.cpy.DefDef(tree)(rhs = exception)
