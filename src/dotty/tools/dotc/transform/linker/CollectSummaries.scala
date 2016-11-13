@@ -413,12 +413,64 @@ class CollectSummaries extends MiniPhase { thisTransform =>
 
     override def transformApply(tree: tpd.Apply)(implicit ctx: Context, info: TransformerInfo): tpd.Tree = {
       if (!tree.symbol.is(Label))
-       registerCall(tree)
+        registerCall(tree)
       tree
     }
 
     override def transformTypeApply(tree: tpd.TypeApply)(implicit ctx: Context, info: TransformerInfo): tpd.Tree = {
       registerCall(tree)
+      tree
+    }
+
+    /*
+     * PATTERN MATCHING WIP
+     */
+/*
+    private val selectors = mutable.Stack[tpd.Tree]()
+
+    override def prepareForMatch(tree: tpd.Match)(implicit ctx: Context): TreeTransform = {
+      println("PREPARE FOR MATCH")
+      selectors.push(tree.selector)
+      this
+    }
+
+    override def transformMatch(tree: tpd.Match)(implicit ctx: Context, info: TransformerInfo): tpd.Tree = {
+      val selector = selectors.pop
+      println("MATCH ON " + selector)
+      tree.cases foreach {case CaseDef(pat, guard, body) => println(pat)}
+      println("DONE")
+      tree
+    }
+
+    override def prepareForUnApply(tree: tpd.UnApply)(implicit ctx: Context): TreeTransform = {
+      println("PREPARE FOR UNAPPLY")
+      val selector = selectors.top
+      selectors.push(selector)
+      val call = tpd.Apply(tree.fun, List(selector))
+      println(call.tpe.widenDealias)
+      registerCall(call)
+      this
+    }
+
+    override def transformUnApply(tree: tpd.UnApply)(implicit ctx: Context, info: TransformerInfo): tpd.Tree = {
+      println("UNAPPLY ON " + selectors.top)
+      selectors.pop
+      tree
+    }
+*/
+    def registerUnApply(selector: tpd.Tree, tree: tpd.UnApply)(implicit ctx: Context, info: TransformerInfo): Unit = {
+      val call = Apply(tree.fun, List(selector))
+      registerCall(call)
+    }
+
+    override def transformMatch(tree: tpd.Match)(implicit ctx: Context, info: TransformerInfo): tpd.Tree = {
+      val selector = tree.selector
+
+      tree.cases foreach {case CaseDef(pat, _, _) => pat match {
+        case unapply: tpd.UnApply => registerUnApply(selector, unapply)
+        case _ =>
+      }}
+
       tree
     }
 
