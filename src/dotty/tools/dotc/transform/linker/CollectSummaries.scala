@@ -15,6 +15,7 @@ import dotty.tools.dotc.transform.SymUtils._
 import dotty.tools.dotc.transform.TreeTransforms._
 import dotty.tools.dotc.transform.linker.summaries.{CallInfo, MethodSummary, OuterTargs}
 import dotty.tools.dotc.transform.linker.types.{ClosureType, PreciseType}
+import dotty.tools.dotc.typer.Applications._
 
 import scala.annotation.tailrec
 import scala.collection.mutable
@@ -461,6 +462,27 @@ class CollectSummaries extends MiniPhase { thisTransform =>
     def registerUnApply(selector: tpd.Tree, tree: tpd.UnApply)(implicit ctx: Context, info: TransformerInfo): Unit = {
       val call = Apply(tree.fun, List(selector))
       registerCall(call)
+
+      val resultType = call.tpe.resultType
+      val resultOfGet = extractorMemberType(resultType, nme.get)
+
+      // handle nested unapplys
+
+      if ((extractorMemberType(resultType, nme.isDefined) isRef defn.BooleanClass) && resultOfGet.exists) { // not a boolean ret
+        if (tree.patterns.size == 1) {
+          tree.patterns.head match {
+            case t: UnApply => registerUnApply(call.select(nme.get), t)
+            case _ =>
+          }
+        } else {
+          (tree.patterns zipWithIndex) foreach {
+            case (t: UnApply, idx) => registerUnApply(call.select(nme.get).select(nme.selectorName(idx)), t)
+            case _ =>
+          }
+        }
+      } else {
+        println("Unhandled: " + resultType.widenDealias)
+      }
     }
 
     override def transformMatch(tree: tpd.Match)(implicit ctx: Context, info: TransformerInfo): tpd.Tree = {
