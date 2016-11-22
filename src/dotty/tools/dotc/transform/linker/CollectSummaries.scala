@@ -428,73 +428,43 @@ class CollectSummaries extends MiniPhase { thisTransform =>
       tree
     }
 
-    /*
-     * PATTERN MATCHING WIP
-     */
-/*
-    private val selectors = mutable.Stack[tpd.Tree]()
-
-    override def prepareForMatch(tree: tpd.Match)(implicit ctx: Context): TreeTransform = {
-      println("PREPARE FOR MATCH")
-      selectors.push(tree.selector)
-      this
-    }
-
-    override def transformMatch(tree: tpd.Match)(implicit ctx: Context, info: TransformerInfo): tpd.Tree = {
-      val selector = selectors.pop
-      println("MATCH ON " + selector)
-      tree.cases foreach {case CaseDef(pat, guard, body) => println(pat)}
-      println("DONE")
-      tree
-    }
-
-    override def prepareForUnApply(tree: tpd.UnApply)(implicit ctx: Context): TreeTransform = {
-      println("PREPARE FOR UNAPPLY")
-      val selector = selectors.top
-      selectors.push(selector)
-      val call = tpd.Apply(tree.fun, List(selector))
-      println(call.tpe.widenDealias)
-      registerCall(call)
-      this
-    }
-
-    override def transformUnApply(tree: tpd.UnApply)(implicit ctx: Context, info: TransformerInfo): tpd.Tree = {
-      println("UNAPPLY ON " + selectors.top)
-      selectors.pop
-      tree
-    }
-*/
     def registerUnApply(selector: tpd.Tree, tree: tpd.UnApply)(implicit ctx: Context, info: TransformerInfo): Unit = {
-      val call = Apply(tree.fun, List(selector))
-      registerCall(call)
+      val unapplyCall = Apply(tree.fun, List(selector))
+      registerCall(unapplyCall)
 
-      val resultType = call.tpe.resultType
-      val resultOfGet = extractorMemberType(resultType, nme.get)
+      val unapplyResultType = unapplyCall.tpe
+      val hasIsDefined = extractorMemberType(unapplyResultType, nme.isDefined) isRef defn.BooleanClass
+      val hasGet = extractorMemberType(unapplyResultType, nme.get).exists
 
-      // handle nested unapplys
+      // if unapply returns an option
+      if (hasIsDefined && hasGet) {
+        val getCall = unapplyCall.select(nme.get)
 
-      if ((extractorMemberType(resultType, nme.isDefined) isRef defn.BooleanClass) && resultOfGet.exists) { // not a boolean ret
+        // register Option.isDefined and Option.get call
+        registerCall(unapplyCall.select(nme.isDefined))
+        registerCall(getCall)
+
+        // process potential nested unapplys
+
         if (tree.patterns.size == 1) {
+          // option of a single element
           tree.patterns.head match {
-            case t: UnApply => registerUnApply(call.select(nme.get), t)
+            case nested: UnApply => registerUnApply(getCall, nested)
             case _ =>
           }
         } else {
-          (tree.patterns zipWithIndex) foreach {
-            case (t: UnApply, idx) => registerUnApply(call.select(nme.get).select(nme.selectorName(idx)), t)
+          // option of several elements (tuple)
+          tree.patterns.zipWithIndex foreach {
+            case (nested: UnApply, idx) => registerUnApply(getCall.select(nme.selectorName(idx)), nested)
             case _ =>
           }
         }
-      } else {
-        println("Unhandled: " + resultType.widenDealias)
       }
     }
 
     override def transformMatch(tree: tpd.Match)(implicit ctx: Context, info: TransformerInfo): tpd.Tree = {
-      val selector = tree.selector
-
-      tree.cases foreach {case CaseDef(pat, _, _) => pat match {
-        case unapply: tpd.UnApply => registerUnApply(selector, unapply)
+      tree.cases foreach { case CaseDef(pat, _, _) => pat match {
+        case unapply: tpd.UnApply => registerUnApply(tree.selector, unapply)
         case _ =>
       }}
 
