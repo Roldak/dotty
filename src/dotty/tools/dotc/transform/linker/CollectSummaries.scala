@@ -3,6 +3,7 @@ package dotty.tools.dotc.transform.linker
 import dotty.tools.dotc.FromTasty.TASTYCompilationUnit
 import dotty.tools.dotc.ast.Trees._
 import dotty.tools.dotc.ast.tpd
+import dotty.tools.dotc.core.Constants.Constant
 import dotty.tools.dotc.core.Contexts._
 import dotty.tools.dotc.core.Decorators._
 import dotty.tools.dotc.core.Flags._
@@ -441,8 +442,20 @@ class CollectSummaries extends MiniPhase { thisTransform =>
           registerNestedUnapply(nestedSel, nestedPat)
         }
 
-      if (tree.fun.symbol.name == nme.unapplySeq)
-        return // unapplySeq not handled yet
+      def registerNestedUnapplyFromSeq(seq: Tree, patterns: List[Tree]): Unit = {
+        registerCall(seq.select(nme.lengthCompare).appliedTo(Literal(Constant(patterns.size))))
+
+        if (patterns.size >= 1) {
+          val headSel  = seq.select(nme.head)
+          val tailSels = for (i <- 1 until patterns.size) yield seq.select(nme.apply).appliedTo(Literal(Constant(i)))
+          val nestedSels = Seq(headSel) ++ tailSels
+
+          for ((nestedSel, nestedPat) <- nestedSels zip patterns) {
+            registerCall(nestedSel)
+            registerNestedUnapply(nestedSel, nestedPat)
+          }
+        }
+      }
 
       val unapplyCall = Apply(tree.fun, List(selector))
       registerCall(unapplyCall)
@@ -454,14 +467,16 @@ class CollectSummaries extends MiniPhase { thisTransform =>
       if (hasIsDefined && hasGet) { // if result of unapply is an Option
         val getCall = unapplyCall.select(nme.get)
 
-        // register Option.isDefined and Option.get call
+        // register Option.isDefined and Option.get calls
         registerCall(unapplyCall.select(nme.isDefined))
         registerCall(getCall)
 
-        if (tree.patterns.size == 1)
-          registerNestedUnapply(getCall, tree.patterns.head)        // Option of a single element
-        else
-          registerNestedUnapplyFromProduct(getCall, tree.patterns)  // Option of several elements
+        if (tree.fun.symbol.name == nme.unapplySeq)                 // result of unapplySeq is Option[Seq[T]]
+          registerNestedUnapplyFromSeq(getCall, tree.patterns)
+        else if (tree.patterns.size == 1)                           // result of unapply is Option[T]
+          registerNestedUnapply(getCall, tree.patterns.head)
+        else                                                        // result of unapply is Option[(T1, ..., Tn)]
+          registerNestedUnapplyFromProduct(getCall, tree.patterns)
 
       } else if (defn.isProductSubType(unapplyResultType)) // if result of unapply is a Product
         registerNestedUnapplyFromProduct(unapplyCall, tree.patterns)
