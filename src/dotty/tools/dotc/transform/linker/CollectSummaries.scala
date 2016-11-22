@@ -429,6 +429,21 @@ class CollectSummaries extends MiniPhase { thisTransform =>
     }
 
     def registerUnApply(selector: tpd.Tree, tree: tpd.UnApply)(implicit ctx: Context, info: TransformerInfo): Unit = {
+      def registerNestedUnapply(nestedSelector: Tree, nestedPattern: Tree): Unit = nestedPattern match {
+        case nestedUnapply: UnApply => registerUnApply(nestedSelector, nestedUnapply)
+        case _ =>
+      }
+
+      def registerNestedUnapplyFromProduct(product: Tree, patterns: List[Tree]): Unit =
+        for ((nestedPat, idx) <- patterns.zipWithIndex) {
+          val nestedSel = product.select(nme.selectorName(idx))
+          registerCall(nestedSel) // register call to Product._x
+          registerNestedUnapply(nestedSel, nestedPat)
+        }
+
+      if (tree.fun.symbol.name == nme.unapplySeq)
+        return // unapplySeq not handled yet
+
       val unapplyCall = Apply(tree.fun, List(selector))
       registerCall(unapplyCall)
 
@@ -436,30 +451,20 @@ class CollectSummaries extends MiniPhase { thisTransform =>
       val hasIsDefined = extractorMemberType(unapplyResultType, nme.isDefined) isRef defn.BooleanClass
       val hasGet = extractorMemberType(unapplyResultType, nme.get).exists
 
-      // if unapply returns an option
-      if (hasIsDefined && hasGet) {
+      if (hasIsDefined && hasGet) { // if result of unapply is an Option
         val getCall = unapplyCall.select(nme.get)
 
         // register Option.isDefined and Option.get call
         registerCall(unapplyCall.select(nme.isDefined))
         registerCall(getCall)
 
-        // process potential nested unapplys
+        if (tree.patterns.size == 1)
+          registerNestedUnapply(getCall, tree.patterns.head)        // Option of a single element
+        else
+          registerNestedUnapplyFromProduct(getCall, tree.patterns)  // Option of several elements
 
-        if (tree.patterns.size == 1) {
-          // option of a single element
-          tree.patterns.head match {
-            case nested: UnApply => registerUnApply(getCall, nested)
-            case _ =>
-          }
-        } else {
-          // option of several elements (tuple)
-          tree.patterns.zipWithIndex foreach {
-            case (nested: UnApply, idx) => registerUnApply(getCall.select(nme.selectorName(idx)), nested)
-            case _ =>
-          }
-        }
-      }
+      } else if (defn.isProductSubType(unapplyResultType)) // if result of unapply is a Product
+        registerNestedUnapplyFromProduct(unapplyCall, tree.patterns)
     }
 
     override def transformMatch(tree: tpd.Match)(implicit ctx: Context, info: TransformerInfo): tpd.Tree = {
